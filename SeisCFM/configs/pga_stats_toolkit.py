@@ -84,10 +84,9 @@ def _cliffs_delta_from_mwu(x: np.ndarray, y: np.ndarray) -> float:
     n, m = x.size, y.size
     if n == 0 or m == 0:
         return np.nan
-    # 使用双侧检验，U 取较小者；为得到 δ 需要 U 的“较大者”，因此取 U1 = n*m - U_small
-    U_small, _ = stats.mannwhitneyu(x, y, alternative="two-sided", method="auto")
-    U_large = n * m - U_small
-    delta = 2.0 * U_large / (n * m) - 1.0
+    # SciPy 返回第一个样本 x 对应的 U 统计量；直接保留它才能维持效应方向。
+    U_x, _ = stats.mannwhitneyu(x, y, alternative="two-sided", method="auto")
+    delta = 2.0 * U_x / (n * m) - 1.0
     return float(delta)
 
 
