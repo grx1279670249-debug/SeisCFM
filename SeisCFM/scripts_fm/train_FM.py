@@ -35,14 +35,17 @@ def main():
     # patience 建议：max(10, int(0.2*N_EPOCHS))
     early_stop = EarlyStopping(patience=20, min_delta=1e-4, verbose=True)
 
-    # 划分
+    # 按使用者指定的分组标识划分；不预设该标识代表事件还是记录。
     meta_df = pd.read_csv(csv_path, low_memory=False)
-    eids = meta_df["filename"].unique()
-    train_eid, temp_eid = train_test_split(eids, test_size=0.2, random_state=42)
-    val_eid, test_eid = train_test_split(temp_eid, test_size=0.5, random_state=42)
+    split_id_column = CFG.SPLIT_ID_COLUMN
+    if split_id_column not in meta_df.columns:
+        raise KeyError(f"划分标识列不存在: {split_id_column}")
+    split_ids = meta_df[split_id_column].unique()
+    train_ids, temp_ids = train_test_split(split_ids, test_size=0.2, random_state=42)
+    val_ids, test_ids = train_test_split(temp_ids, test_size=0.5, random_state=42)
 
-    train_idx = meta_df.index[meta_df["filename"].isin(train_eid)].tolist()
-    val_idx = meta_df.index[meta_df["filename"].isin(val_eid)].tolist()
+    train_idx = meta_df.index[meta_df[split_id_column].isin(train_ids)].tolist()
+    val_idx = meta_df.index[meta_df[split_id_column].isin(val_ids)].tolist()
 
     ds = NGADataset(h5_path=h5_path, csv_path=csv_path, stats_path=stats_path)
     train_ds = Subset(ds, train_idx)
