@@ -5,8 +5,6 @@ import numpy as np
 
 import torch
 from torch.utils.data import DataLoader, Subset
-from torch.utils.tensorboard import SummaryWriter
-from configs.train_parameter import CFG
 from configs.Dataset import NGADataset
 from configs.UNet import SeismicUNet
 from configs.tools import load_fm_ckpt, short_ode_sample, griffin_lim_reconstruct
@@ -15,7 +13,6 @@ from configs.visual_tools import plot_input_output_batch, plot_waveforms
 def main():
     model_dir = "Flow_Matching_2"
     SAVE_DIR = os.path.join("models", model_dir)
-    ckpt_path = os.path.join(CFG.SAVE_DIR, "last_s0.pt")
 
     stats_path = r"G:\GRX\GMA\Data\global_stats.npz"
     csv_path = r"G:\GRX\GMA\Data\meta.csv"
@@ -29,25 +26,19 @@ def main():
     # 划分
     meta_df = pd.read_csv(csv_path, low_memory=False)
     eids = meta_df["filename"].unique()
-    train_eid, temp_eid = train_test_split(eids, test_size=0.2, random_state=42)
-    val_eid, test_eid = train_test_split(temp_eid, test_size=0.5, random_state=42)
+    _, temp_eid = train_test_split(eids, test_size=0.2, random_state=42)
+    _, test_eid = train_test_split(temp_eid, test_size=0.5, random_state=42)
 
-    train_idx = meta_df.index[meta_df["filename"].isin(train_eid)].tolist()
     test_idx = meta_df.index[meta_df["filename"].isin(test_eid)].tolist()
 
     ds = NGADataset(h5_path=h5_path, csv_path=csv_path, stats_path=stats_path)
-    train_ds = Subset(ds, train_idx)
     test_ds = Subset(ds, test_idx)
-
-    train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=0, persistent_workers=False,
-                             pin_memory=True, drop_last=True)
 
     test_loader = DataLoader(test_ds, batch_size=1, shuffle=False, num_workers=0, persistent_workers=False,
                             pin_memory=True, drop_last=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = SeismicUNet(img_size=(129, 188), in_channels=3, out_channels=3).to(device)
-    total_steps = CFG.N_EPOCHS * len(train_loader)
 
     _ = load_fm_ckpt(model, os.path.join(SAVE_DIR, "best_s0.pt"), device, use_ema=True)
 
@@ -59,7 +50,7 @@ def main():
     vs_mean = float(stats.get("vs_mean"))
     vs_std = float(stats.get("vs_std"))
 
-    for spec, meta, fault, wave, trace in train_loader:
+    for spec, meta, fault, wave, trace in test_loader:
         print(trace)
         spec = spec.to(device)
         meta = meta.to(device)

@@ -1,7 +1,6 @@
 import torch
 from pathlib import Path
 from configs.tools import short_ode_sample
-import pandas as pd
 import numpy as np
 
 # ---------- 频带与代理指标 ----------
@@ -26,31 +25,45 @@ def split_bands(t: torch.Tensor, freqs: np.ndarray, freq_dim=2):
 
 
 @torch.no_grad()
-def proxy_metrics(gen_spec: torch.Tensor, real_spec: torch.Tensor, eps=1e-8):
-    # 对齐形状
-    assert gen_spec.shape == real_spec.shape, "gen/real spec shape mismatch"
-    B = gen_spec.size(0)
+def proxy_metrics(
+        gen_spec_std: torch.Tensor,
+        real_spec_std: torch.Tensor,
+        spec_mu_db: float,
+        spec_std_db: float,
+        magnitude_floor: float = 1e-8,
+):
+    """Compare normalized spectra without treating normalized dB values as energy."""
+    assert gen_spec_std.shape == real_spec_std.shape, "gen/real spec shape mismatch"
+    if spec_std_db <= 0:
+        raise ValueError("spec_std_db must be positive")
 
-    # 逐像素 RMSE / MAPE（对幅值谱/对数谱均可；你的数据目前是标准化后的spec_std，保持一致比较）
-    diff = gen_spec - real_spec
-    rmse = torch.sqrt((diff ** 2).mean(dim=(1,2,3)))          # (B,)
-    mape = (diff.abs() / (real_spec.abs() + eps)).mean(dim=(1,2,3))
+    diff_std = gen_spec_std - real_spec_std
+    rmse_std = torch.sqrt((diff_std ** 2).mean(dim=(1, 2, 3)))
 
-    # 能量（平方和）
-    gE = (gen_spec ** 2).sum(dim=(1,2,3))
-    rE = (real_spec ** 2).sum(dim=(1,2,3))
-    energy_ratio = gE / (rE + eps)
+    gen_db = gen_spec_std * spec_std_db + spec_mu_db
+    real_db = real_spec_std * spec_std_db + spec_mu_db
+    mae_db = (gen_db - real_db).abs().mean(dim=(1, 2, 3))
+
+    # Dataset.py uses 20*log10(magnitude + 1e-8); invert that transform
+    # before computing physical energy and band-share metrics.
+    gen_mag = (torch.pow(10.0, gen_db / 20.0) - magnitude_floor).clamp_min(0.0)
+    real_mag = (torch.pow(10.0, real_db / 20.0) - magnitude_floor).clamp_min(0.0)
+    tiny = torch.finfo(gen_mag.dtype).tiny
+
+    gE = (gen_mag ** 2).sum(dim=(1, 2, 3))
+    rE = (real_mag ** 2).sum(dim=(1, 2, 3))
+    energy_ratio = gE / rE.clamp_min(tiny)
 
     # 频带能量占比
-    freqs = np.linspace(0, 50, 129)
-    gL, gM, gH = split_bands(gen_spec, freqs)  # (B,C,*,W)
-    rL, rM, rH = split_bands(real_spec, freqs)
+    freqs = np.linspace(0, 50, gen_mag.size(2))
+    gL, gM, gH = split_bands(gen_mag, freqs)  # (B,C,*,W)
+    rL, rM, rH = split_bands(real_mag, freqs)
 
-    def band_share(xL, xM, xH, eps=1e-8):
+    def band_share(xL, xM, xH):
         EL = (xL**2).sum(dim=(1,2,3))
         EM = (xM**2).sum(dim=(1,2,3))
         EH = (xH**2).sum(dim=(1,2,3))
-        S  = EL + EM + EH + eps
+        S = (EL + EM + EH).clamp_min(tiny)
         return EL/S, EM/S, EH/S  # (B,)
 
     gSL, gSM, gSH = band_share(gL, gM, gH)
@@ -60,25 +73,34 @@ def proxy_metrics(gen_spec: torch.Tensor, real_spec: torch.Tensor, eps=1e-8):
     band_L1 = (gSL-rSL).abs() + (gSM-rSM).abs() + (gSH-rSH).abs()  # (B,)
 
     # 关键频带局部能量（可根据你的T1映射到频率带后替换索引范围）
-    # 这里以“低频段”作为桥梁敏感代理；也可细分一个更窄的窗口
+    # 这里以 1-10 Hz 中频段作为桥梁敏感代理；也可细分一个更窄的窗口
     g_key = (gM ** 2).sum(dim=(1,2,3))
     r_key = (rM ** 2).sum(dim=(1,2,3))
-    key_ratio = g_key / (r_key + eps)
+    key_ratio = g_key / r_key.clamp_min(tiny)
 
     # 汇总为标量（batch均值）
     return {
-        "rmse": rmse.mean().item(),
-        "mape": mape.mean().item(),
+        "rmse_std": rmse_std.mean().item(),
+        "mae_db": mae_db.mean().item(),
         "energy_ratio": energy_ratio.mean().item(),
         "band_L1": band_L1.mean().item(),
         "key_ratio": key_ratio.mean().item()
     }
 
 @torch.no_grad()
-def evaluate_quality(model, loader, device, writer, epoch, save_dir, n_batches):
+def evaluate_quality(
+        model, loader, device, writer, epoch, save_dir, n_batches,
+        spec_mu_db, spec_std_db,
+):
 
     model.eval()
-    metrics_accum = {"rmse": 0.0, "mape": 0.0, "energy_ratio": 0.0, "band_L1": 0.0, "key_ratio": 0.0}
+    metrics_accum = {
+        "rmse_std": 0.0,
+        "mae_db": 0.0,
+        "energy_ratio": 0.0,
+        "band_L1": 0.0,
+        "key_ratio": 0.0,
+    }
     count = 0
 
     if save_dir is not None:
@@ -97,7 +119,7 @@ def evaluate_quality(model, loader, device, writer, epoch, save_dir, n_batches):
         gen = short_ode_sample(model, meta, fault, device, steps=20, x_T_shape=spec.shape[1:])
 
         real = spec.to(device)
-        m = proxy_metrics(gen, real)
+        m = proxy_metrics(gen, real, spec_mu_db, spec_std_db)
         for k in metrics_accum:
             metrics_accum[k] += m[k]
         count += 1
@@ -105,14 +127,14 @@ def evaluate_quality(model, loader, device, writer, epoch, save_dir, n_batches):
     if count > 0:
         for k in metrics_accum: metrics_accum[k] /= count
         if writer is not None:
-            writer.add_scalar("qual/rmse", metrics_accum["rmse"], epoch)
-            writer.add_scalar("qual/mape", metrics_accum["mape"], epoch)
+            writer.add_scalar("qual/rmse_std", metrics_accum["rmse_std"], epoch)
+            writer.add_scalar("qual/mae_db", metrics_accum["mae_db"], epoch)
             writer.add_scalar("qual/energy_ratio", metrics_accum["energy_ratio"], epoch)
             writer.add_scalar("qual/band_L1", metrics_accum["band_L1"], epoch)
             writer.add_scalar("qual/key_ratio", metrics_accum["key_ratio"], epoch)
 
-        print(f"[Qual] ep{epoch}: RMSE={metrics_accum['rmse']:.4f} | "
-              f"MAPE={metrics_accum['mape']:.4f} | EnergyRatio={metrics_accum['energy_ratio']:.3f} | "
+        print(f"[Qual] ep{epoch}: RMSE(std)={metrics_accum['rmse_std']:.4f} | "
+              f"MAE(dB)={metrics_accum['mae_db']:.4f} | EnergyRatio={metrics_accum['energy_ratio']:.3f} | "
               f"BandL1={metrics_accum['band_L1']:.3f} | KeyRatio={metrics_accum['key_ratio']:.3f}")
 
         return metrics_accum

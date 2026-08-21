@@ -26,10 +26,10 @@ def main():
     assert os.path.exists(csv_path) and os.path.exists(h5_path), "请检查数据路径"
 
     # === PATCH C1: CSV & EarlyStopping 初始化 ===
-    metrics_csv = os.path.join(CFG.SAVE_DIR, "train_epoch_metrics.csv")
+    metrics_csv = os.path.join(CFG.SAVE_DIR, "train_epoch_metrics_physical.csv")
     init_csv_logger(metrics_csv, header=[
         "timestamp", "epoch", "train_loss", "val_loss", "cos", "|v|/|u|",
-        "RMSE", "MAPE", "EnergyRatio", "BandL1", "KeyRatio", "noise_alpha"
+        "RMSE_std", "MAE_dB", "EnergyRatio", "BandL1", "KeyRatio", "noise_alpha"
     ])
 
     # patience 建议：max(10, int(0.2*N_EPOCHS))
@@ -117,7 +117,8 @@ def main():
             f"Epoch {epoch}/{CFG.N_EPOCHS} | train_loss: {train_loss:.6f} | val_loss: {val_loss:.6f} | alpha: {noise_alpha(epoch):.2f}")
 
         qual = evaluate_quality(model, val_loader, device, writer, epoch,
-                                save_dir=CFG.SAVE_DIR, n_batches=10)
+                                save_dir=CFG.SAVE_DIR, n_batches=10,
+                                spec_mu_db=ds.spec_mu_db, spec_std_db=ds.spec_std_db)
 
         # —— 记录最优（可按 val_loss/val_cos/val_ratio 组合策略）——
         if val_loss < best_val:
@@ -166,8 +167,8 @@ def main():
             },
         }, os.path.join(CFG.SAVE_DIR, "last_s0.pt"))
 
-        rmse = qual["rmse"] if qual is not None else float("nan")
-        mape = qual["mape"] if qual is not None else float("nan")
+        rmse_std = qual["rmse_std"] if qual is not None else float("nan")
+        mae_db = qual["mae_db"] if qual is not None else float("nan")
         enr = qual["energy_ratio"] if qual is not None else float("nan")
         bL1 = qual["band_L1"] if qual is not None else float("nan")
         krt = qual["key_ratio"] if qual is not None else float("nan")
@@ -175,7 +176,7 @@ def main():
         append_csv(metrics_csv, [
             datetime.now().isoformat(timespec="seconds"),
             epoch, f"{train_loss:.6f}", f"{val_loss:.6f}", f"{train_cos:.6f}", f"{train_ratio:.6f}",
-            f"{rmse:.6f}", f"{mape:.6f}", f"{enr:.6f}", f"{bL1:.6f}", f"{krt:.6f}",
+            f"{rmse_std:.6f}", f"{mae_db:.6f}", f"{enr:.6f}", f"{bL1:.6f}", f"{krt:.6f}",
             f"{noise_alpha(epoch):.3f}"
         ])
 
