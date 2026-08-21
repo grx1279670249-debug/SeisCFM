@@ -5,6 +5,7 @@ import numpy as np
 
 import torch
 from torch.utils.data import DataLoader, Subset
+from configs.train_parameter import CFG
 from configs.Dataset import NGADataset
 from configs.UNet import SeismicUNet
 from configs.tools import load_fm_ckpt, short_ode_sample, griffin_lim_reconstruct
@@ -23,13 +24,16 @@ def main():
     GMU = float(stats["spec_mu_db"])
     GSTD = float(stats["spec_std_db"])
 
-    # 划分
+    # 使用与训练相同的中性分组标识；其语义由使用者决定。
     meta_df = pd.read_csv(csv_path, low_memory=False)
-    eids = meta_df["filename"].unique()
-    _, temp_eid = train_test_split(eids, test_size=0.2, random_state=42)
-    _, test_eid = train_test_split(temp_eid, test_size=0.5, random_state=42)
+    split_id_column = CFG.SPLIT_ID_COLUMN
+    if split_id_column not in meta_df.columns:
+        raise KeyError(f"划分标识列不存在: {split_id_column}")
+    split_ids = meta_df[split_id_column].unique()
+    _, temp_ids = train_test_split(split_ids, test_size=0.2, random_state=42)
+    _, test_ids = train_test_split(temp_ids, test_size=0.5, random_state=42)
 
-    test_idx = meta_df.index[meta_df["filename"].isin(test_eid)].tolist()
+    test_idx = meta_df.index[meta_df[split_id_column].isin(test_ids)].tolist()
 
     ds = NGADataset(h5_path=h5_path, csv_path=csv_path, stats_path=stats_path)
     test_ds = Subset(ds, test_idx)

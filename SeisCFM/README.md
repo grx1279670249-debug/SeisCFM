@@ -21,6 +21,7 @@ SeisCFM contains training and generation pipelines for a seismic conditional flo
 1. Request and download the NGA-West2 dataset from the PEER ground-motion database: https://ngawest2.berkeley.edu/.
 2. Place the downloaded `NGA_West2.hdf5` file inside the `Data/` directory.
 3. If you store the files elsewhere, update the `stats_path`, `csv_path`, and `h5_path` variables near the top of `scripts_fm/train_FM.py` and `scripts_fm/generate.py` to point to your actual locations.
+4. Set `CFG.SPLIT_ID_COLUMN` to the metadata column that should keep samples together during splitting. The column is intentionally generic: it may represent events, records, or any other grouping chosen by the user. It defaults to `filename` for compatibility with the existing metadata.
 
 ## Training
 Train the conditional flow matching model using the prepared NGA-West2 data. From the repository root:

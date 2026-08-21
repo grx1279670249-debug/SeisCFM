@@ -5,6 +5,8 @@ from dataclasses import dataclass
 class TrainConfig:
     SAVE_DIR = os.path.join("models", "Flow_Matching_3") # 保存路径
     os.makedirs(SAVE_DIR, exist_ok=True)
+    # 用于数据集划分的分组标识列。其语义由使用者决定，可指事件、记录或其他分组。
+    SPLIT_ID_COLUMN = "filename"
     BATCH_SIZE = 16 # 批次大小
     N_EPOCHS   = 300 # 最大训练轮数
     LEARNING_RATE = 3e-4 # 初始学习率
